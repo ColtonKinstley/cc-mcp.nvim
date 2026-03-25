@@ -1,0 +1,6 @@
+{
+  "name": "cc-mcp.nvim",
+  "version": "0.1.0",
+  "description": "Neovim chat buffer powered by Claude Code via MCP channel",
+  "private": true
+}
