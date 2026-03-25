@@ -153,7 +153,11 @@ methods.get_health = function()
 end
 
 methods.exec_lua = function(params)
-  local ok, result = pcall(vim.api.nvim_exec_lua, params.code, {})
+  local chunk, load_err = load(params.code)
+  if not chunk then
+    return { error = tostring(load_err) }
+  end
+  local ok, result = pcall(chunk)
   if not ok then
     return { error = tostring(result) }
   end
