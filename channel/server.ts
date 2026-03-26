@@ -367,4 +367,11 @@ function handleSocketMessage(msg: Message, conn: Connection): void {
 // -- Start --
 
 await socketManager.start(handleSocketMessage);
-await mcp.connect(new StdioServerTransport());
+
+// When spawned by Claude Code via .mcp.json: stdin/stdout are MCP transport.
+// When spawned standalone by Neovim (--socket-only): just run the socket server.
+if (process.argv.includes("--socket-only")) {
+  console.error("cc-mcp: running in socket-only mode (waiting for Neovim connections)");
+} else {
+  await mcp.connect(new StdioServerTransport());
+}

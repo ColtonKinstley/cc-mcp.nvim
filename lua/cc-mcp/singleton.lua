@@ -47,7 +47,7 @@ function M.plugin_root()
   return nil
 end
 
--- Spawn Claude Code as a detached process
+-- Spawn the channel server as a detached process
 function M.spawn()
   local root = M.plugin_root()
   if not root then
@@ -55,22 +55,32 @@ function M.spawn()
     return false
   end
 
-  local nvim_config = vim.fn.stdpath("config")
+  local server_script = root .. "/channel/server.ts"
+  local stat = vim.loop.fs_stat(server_script)
+  if not stat then
+    vim.notify("cc-mcp: channel/server.ts not found at " .. server_script, vim.log.levels.ERROR)
+    return false
+  end
 
-  -- Spawn claude with --plugin-dir pointing to our plugin
+  -- Spawn the channel server directly (not Claude Code).
+  -- Claude Code connects to this server via .mcp.json when it starts.
   local handle, pid
-  handle, pid = vim.loop.spawn("claude", {
-    args = { "--plugin-dir", root },
-    cwd = nvim_config,
+  handle, pid = vim.loop.spawn("bun", {
+    args = { "run", server_script, "--socket-only" },
+    cwd = root,
+    env = {
+      "CC_MCP_SOCKET=" .. socket_path,
+      "HOME=" .. os.getenv("HOME"),
+      "PATH=" .. os.getenv("PATH"),
+    },
     detached = true,
     stdio = { nil, nil, nil },
   }, function(code, signal)
-    -- Process exited
     if handle then handle:close() end
   end)
 
   if not handle then
-    vim.notify("cc-mcp: failed to spawn claude process", vim.log.levels.ERROR)
+    vim.notify("cc-mcp: failed to spawn channel server", vim.log.levels.ERROR)
     return false
   end
 
