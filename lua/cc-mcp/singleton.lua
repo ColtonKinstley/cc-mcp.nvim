@@ -5,6 +5,7 @@ local M = {}
 
 local socket_path = os.getenv("CC_MCP_SOCKET") or "/tmp/cc-mcp.sock"
 local pid_path = socket_path:gsub("%.sock$", ".pid")
+local log_path = socket_path:gsub("%.sock$", ".log")
 
 -- Check if the server process is alive via PID file
 local function pid_is_alive()

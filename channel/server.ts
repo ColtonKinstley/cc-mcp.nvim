@@ -6,10 +6,17 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { appendFileSync } from "fs";
 import { SocketManager, type Connection } from "./socket-manager";
 import { type Message, type Chat, type Verdict, type Response } from "./protocol";
 
 const SOCKET_PATH = process.env.CC_MCP_SOCKET ?? "/tmp/cc-mcp.sock";
+const LOG_PATH = SOCKET_PATH.replace(/\.sock$/, ".log");
+
+function log(msg: string) {
+  const ts = new Date().toISOString();
+  appendFileSync(LOG_PATH, `[${ts}] ${msg}\n`);
+}
 
 // Pending RPC requests to Neovim (MCP tool -> socket -> Neovim -> socket -> resolve)
 const pendingRequests = new Map<string, {
@@ -311,9 +318,24 @@ const socketManager = new SocketManager(SOCKET_PATH, {
   },
 });
 
+let mcpConnected = false;
+
 function handleSocketMessage(msg: Message, conn: Connection): void {
+  log(`socket-recv: ${msg.type}${msg.type === "chat" ? " content=" + JSON.stringify((msg as Chat).content).slice(0, 80) : ""}`);
+
   // Chat messages -> forward to Claude Code as channel notification
   if (msg.type === "chat") {
+    if (!mcpConnected) {
+      log("WARN: chat message received but MCP not connected — message will be lost");
+      // Send an error reply back to Neovim so user isn't left hanging
+      conn.send({
+        id: (msg as Chat).id,
+        type: "reply_chunk",
+        content: "*cc-mcp: Claude Code is not connected.* Start a Claude Code session with `--mcp-config` pointing to this plugin's `.mcp.json` to enable chat.",
+      });
+      conn.send({ id: (msg as Chat).id, type: "reply_end" });
+      return;
+    }
     const chat = msg as Chat;
     mcp.notification({
       method: "notifications/claude/channel",
@@ -322,6 +344,7 @@ function handleSocketMessage(msg: Message, conn: Connection): void {
         meta: { chat_id: chat.id, instance: chat.instance },
       },
     });
+    log("mcp-send: channel notification forwarded");
     return;
   }
 
@@ -367,11 +390,15 @@ function handleSocketMessage(msg: Message, conn: Connection): void {
 // -- Start --
 
 await socketManager.start(handleSocketMessage);
+log(`server started, socket=${SOCKET_PATH}`);
 
 // When spawned by Claude Code via .mcp.json: stdin/stdout are MCP transport.
 // When spawned standalone by Neovim (--socket-only): just run the socket server.
 if (process.argv.includes("--socket-only")) {
-  console.error("cc-mcp: running in socket-only mode (waiting for Neovim connections)");
+  log("running in socket-only mode (no MCP client)");
 } else {
+  log("connecting MCP transport on stdio...");
   await mcp.connect(new StdioServerTransport());
+  mcpConnected = true;
+  log("MCP connected");
 }
