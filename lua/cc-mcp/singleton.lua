@@ -1,11 +1,10 @@
 -- lua/cc-mcp/singleton.lua
--- Manages the Claude Code + channel server singleton process
+-- Checks whether the channel server is running (spawned by Claude Code via .mcp.json)
 
 local M = {}
 
 local socket_path = os.getenv("CC_MCP_SOCKET") or "/tmp/cc-mcp.sock"
 local pid_path = socket_path:gsub("%.sock$", ".pid")
-local log_path = socket_path:gsub("%.sock$", ".log")
 
 -- Check if the server process is alive via PID file
 local function pid_is_alive()
@@ -15,7 +14,6 @@ local function pid_is_alive()
   f:close()
   pid = pid and pid:match("%d+")
   if not pid then return false end
-  -- kill -0 checks if process exists without sending a signal
   local ok = os.execute("kill -0 " .. pid .. " 2>/dev/null")
   return ok == true or ok == 0
 end
@@ -26,7 +24,7 @@ local function cleanup_stale()
   os.remove(pid_path)
 end
 
--- Check if the socket is alive (file exists + process is running)
+-- Check if the channel server is running (socket exists + process alive)
 function M.is_alive()
   local stat = vim.loop.fs_stat(socket_path)
   if not stat then return false end
@@ -37,109 +35,14 @@ function M.is_alive()
   return true
 end
 
--- Get the plugin root directory (where .mcp.json lives)
+-- Get the plugin root directory
 function M.plugin_root()
-  -- Find the plugin's install directory via the runtime path
   for _, path in ipairs(vim.api.nvim_list_runtime_paths()) do
     if path:match("cc%-mcp%.nvim") then
       return path
     end
   end
   return nil
-end
-
--- Spawn the channel server as a detached process
-function M.spawn()
-  local root = M.plugin_root()
-  if not root then
-    vim.notify("cc-mcp: could not find plugin root directory", vim.log.levels.ERROR)
-    return false
-  end
-
-  local server_script = root .. "/channel/server.ts"
-  local stat = vim.loop.fs_stat(server_script)
-  if not stat then
-    vim.notify("cc-mcp: channel/server.ts not found at " .. server_script, vim.log.levels.ERROR)
-    return false
-  end
-
-  -- Spawn the channel server directly (not Claude Code).
-  -- Claude Code connects to this server via .mcp.json when it starts.
-  local handle, pid
-  handle, pid = vim.loop.spawn("bun", {
-    args = { "run", server_script, "--socket-only" },
-    cwd = root,
-    env = {
-      "CC_MCP_SOCKET=" .. socket_path,
-      "HOME=" .. os.getenv("HOME"),
-      "PATH=" .. os.getenv("PATH"),
-    },
-    detached = true,
-    stdio = { nil, nil, nil },
-  }, function(code, signal)
-    if handle then handle:close() end
-  end)
-
-  if not handle then
-    vim.notify("cc-mcp: failed to spawn channel server", vim.log.levels.ERROR)
-    return false
-  end
-
-  -- Detach so it survives Neovim exit
-  handle:unref()
-  return true
-end
-
--- Wait for the socket to become available with exponential backoff
-function M.wait_for_socket(callback, timeout_ms)
-  timeout_ms = timeout_ms or 10000
-  local elapsed = 0
-  local delay = 50
-
-  local function poll()
-    if M.is_alive() then
-      callback(true)
-      return
-    end
-
-    elapsed = elapsed + delay
-    if elapsed >= timeout_ms then
-      callback(false)
-      return
-    end
-
-    vim.defer_fn(function()
-      poll()
-    end, delay)
-
-    -- Exponential backoff: 50, 100, 200, 400, 800, 1000, 1000, ...
-    delay = math.min(delay * 2, 1000)
-  end
-
-  poll()
-end
-
--- Ensure the server is running and connect
-function M.ensure_running(on_ready, on_error)
-  if M.is_alive() then
-    on_ready()
-    return
-  end
-
-  -- Spawn and wait
-  local spawned = M.spawn()
-  if not spawned then
-    if on_error then on_error("Failed to spawn claude") end
-    return
-  end
-
-  M.wait_for_socket(function(success)
-    if success then
-      on_ready()
-    else
-      if on_error then on_error("Timed out waiting for channel server") end
-    end
-  end)
 end
 
 function M.get_socket_path()

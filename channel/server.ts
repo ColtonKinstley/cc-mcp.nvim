@@ -318,24 +318,11 @@ const socketManager = new SocketManager(SOCKET_PATH, {
   },
 });
 
-let mcpConnected = false;
-
 function handleSocketMessage(msg: Message, conn: Connection): void {
   log(`socket-recv: ${msg.type}${msg.type === "chat" ? " content=" + JSON.stringify((msg as Chat).content).slice(0, 80) : ""}`);
 
   // Chat messages -> forward to Claude Code as channel notification
   if (msg.type === "chat") {
-    if (!mcpConnected) {
-      log("WARN: chat message received but MCP not connected — message will be lost");
-      // Send an error reply back to Neovim so user isn't left hanging
-      conn.send({
-        id: (msg as Chat).id,
-        type: "reply_chunk",
-        content: "*cc-mcp: Claude Code is not connected.* Start a Claude Code session with `--mcp-config` pointing to this plugin's `.mcp.json` to enable chat.",
-      });
-      conn.send({ id: (msg as Chat).id, type: "reply_end" });
-      return;
-    }
     const chat = msg as Chat;
     mcp.notification({
       method: "notifications/claude/channel",
@@ -345,6 +332,12 @@ function handleSocketMessage(msg: Message, conn: Connection): void {
       },
     });
     log("mcp-send: channel notification forwarded");
+    return;
+  }
+
+  // Reset — log it (conversation context is managed by Claude Code)
+  if (msg.type === "reset") {
+    log("reset requested by Neovim");
     return;
   }
 
@@ -392,13 +385,7 @@ function handleSocketMessage(msg: Message, conn: Connection): void {
 await socketManager.start(handleSocketMessage);
 log(`server started, socket=${SOCKET_PATH}`);
 
-// When spawned by Claude Code via .mcp.json: stdin/stdout are MCP transport.
-// When spawned standalone by Neovim (--socket-only): just run the socket server.
-if (process.argv.includes("--socket-only")) {
-  log("running in socket-only mode (no MCP client)");
-} else {
-  log("connecting MCP transport on stdio...");
-  await mcp.connect(new StdioServerTransport());
-  mcpConnected = true;
-  log("MCP connected");
-}
+// Connect MCP transport on stdio (server is always spawned by Claude Code)
+log("connecting MCP transport on stdio...");
+await mcp.connect(new StdioServerTransport());
+log("MCP connected");

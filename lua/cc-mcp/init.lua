@@ -36,6 +36,25 @@ function M.setup(opts)
   })
 end
 
+-- Print setup instructions
+local function show_setup()
+  local singleton = require("cc-mcp.singleton")
+  local root = singleton.plugin_root() or "<plugin-path>"
+  local lines = {
+    "cc-mcp.nvim setup:",
+    "",
+    "1. Start Claude Code in the plugin directory with channel support:",
+    "   cd " .. root,
+    "   claude --dangerously-load-development-channels server:cc-mcp",
+    "",
+    "2. Open Neovim and run :Help",
+    "",
+    "The channel server is spawned by Claude Code via .mcp.json.",
+    "Neovim connects to it over a Unix socket at " .. singleton.get_socket_path(),
+  }
+  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+end
+
 -- Send a query immediately after opening the chat buffer
 local function send_initial_query(query)
   local chat = require("cc-mcp.chat")
@@ -55,7 +74,13 @@ function M.open(query)
   local chat = require("cc-mcp.chat")
   local rpc = require("cc-mcp.rpc")
 
-  -- Handle :Help reset — clear chat buffer, send reset signal
+  -- :Help setup — print instructions
+  if query == "setup" then
+    show_setup()
+    return
+  end
+
+  -- :Help reset — clear chat buffer, send reset signal
   if query == "reset" then
     if socket.is_connected() then
       socket.send({ type = "reset" })
@@ -65,28 +90,34 @@ function M.open(query)
     return
   end
 
-  -- Ensure server is running
-  singleton.ensure_running(function()
-    -- Connect socket if not already
-    if not socket.is_connected() then
-      rpc.setup()
-      socket.connect(singleton.get_socket_path(), function()
-        chat.open()
-        if query and query ~= "" then
-          send_initial_query(query)
-        end
-      end, function(err)
-        vim.notify("cc-mcp: connection failed: " .. tostring(err), vim.log.levels.ERROR)
-      end)
-    else
+  -- Check if channel server is running (spawned by Claude Code)
+  if not singleton.is_alive() then
+    vim.notify(
+      "cc-mcp: Channel server not running.\n"
+        .. "Start Claude Code with channel support first.\n"
+        .. "Run :Help setup for instructions.",
+      vim.log.levels.WARN
+    )
+    return
+  end
+
+  -- Connect socket if not already
+  if not socket.is_connected() then
+    rpc.setup()
+    socket.connect(singleton.get_socket_path(), function()
       chat.open()
       if query and query ~= "" then
         send_initial_query(query)
       end
+    end, function(err)
+      vim.notify("cc-mcp: connection failed: " .. tostring(err), vim.log.levels.ERROR)
+    end)
+  else
+    chat.open()
+    if query and query ~= "" then
+      send_initial_query(query)
     end
-  end, function(err)
-    vim.notify("cc-mcp: " .. tostring(err), vim.log.levels.ERROR)
-  end)
+  end
 end
 
 return M
